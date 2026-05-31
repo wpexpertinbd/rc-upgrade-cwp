@@ -71,8 +71,12 @@ FPM_CONF=$(echo "$EXEC" | grep -oP '(?:--fpm-config|-y)\s+\K[^ ;]+' | head -1)
 [ -f "$FPM_CONF" ] || FPM_CONF="$PREFIX/etc/php-fpm.conf"
 POOL_INC=$(grep -oP '^\s*include\s*=\s*\K\S+' "$FPM_CONF" 2>/dev/null | head -1)
 POOL_DIR=$(dirname "${POOL_INC:-$PREFIX/etc/php-fpm.d/x}")
-RC_OWNER=$(stat -c '%U' "$RC_DIR/index.php" 2>/dev/null || echo cwpsvc)
-RC_GROUP=$(stat -c '%G' "$RC_DIR/index.php" 2>/dev/null || echo cwpsvc)
+# Use the roundcube DIRECTORY owner (always cwpsvc on CWP). NOT index.php: after a
+# 1.7 upgrade index.php/static.php can end up owned by cbpolicyd, which would make
+# the pool run as the wrong user.
+RC_OWNER=$(stat -c '%U' "$RC_DIR" 2>/dev/null || echo cwpsvc)
+RC_GROUP=$(stat -c '%G' "$RC_DIR" 2>/dev/null || echo cwpsvc)
+case "$RC_OWNER" in root|cbpolicyd|"") RC_OWNER=cwpsvc; RC_GROUP=cwpsvc;; esac
 PHP_VER=$("$PHP_CLI" -r 'echo PHP_VERSION;' 2>/dev/null)
 
 mkdir -p "$BK"
