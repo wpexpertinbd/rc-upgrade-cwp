@@ -1,0 +1,5 @@
+# runtime artifacts (created on the server, never commit)
+rc-upgrade-backups/
+*.log
+*.bak
+rc-diag.txt
