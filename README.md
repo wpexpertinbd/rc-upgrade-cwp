@@ -36,19 +36,25 @@ webmail — so do **NOT** repoint the socket globally. Only the two webmail rout
 ## Quick start
 
 ```bash
-# get the script onto the server, then (if pasted from Windows):
-sed -i 's/\r$//' rc-upgrade.sh && chmod +x rc-upgrade.sh
-
+git clone https://github.com/wpexpertinbd/rc-upgrade-cwp /root/rc-upgrade-cwp
+cd /root/rc-upgrade-cwp
 ./rc-upgrade.sh detect      # confirm php8.3 CLI + extensions; changes nothing
-./rc-upgrade.sh pool        # create dedicated php-fpm83 pool + /run/rc-php83.sock
-./rc-upgrade.sh php-swap    # point webmail PHP -> 8.3 (docroot unchanged)
-#   -> load webmail: your CURRENT Roundcube should still work, now on 8.3
-./rc-upgrade.sh upgrade     # backup files+DB, download 1.7.x, installto, fix perms
-./rc-upgrade.sh plugins     # trim incompatible plugins (carddav/calendar/tasklist)
-./rc-upgrade.sh routing     # docroot -> public_html + static.php handling
-#   -> load /roundcube AND mail. webmail: styled 1.7.x login on PHP 8.3
-./rc-upgrade.sh harden      # OPTIONAL: real client IP + login logging + fail2ban jail
+./rc-upgrade.sh all         # pool->php-swap->upgrade->plugins->routing->harden
 ```
+
+`all` runs the whole sequence in order and **stops at the first failure** (each step
+gets its own `cwpsrv -t` validation and its own `/root/rc-upgrade-<phase>-<ts>.log`).
+Prefer to go step-by-step? Run them individually instead of `all`:
+
+```bash
+./rc-upgrade.sh pool        # dedicated php-fpm83 pool + /run/rc-php83.sock (+ ReadWritePaths drop-in)
+./rc-upgrade.sh php-swap    # point webmail PHP -> 8.3 (docroot unchanged; checkpoint)
+./rc-upgrade.sh upgrade     # backup files+DB, download 1.7.x, installto, fix perms
+./rc-upgrade.sh plugins     # baseline plugin set (drops incompatible 3rd-party plugins)
+./rc-upgrade.sh routing     # docroot -> public_html + static.php handling
+./rc-upgrade.sh harden      # real client IP (proxy_whitelist) + login logging + fail2ban jail
+```
+(Pasted the script from Windows instead of cloning? `sed -i 's/\r$//' rc-upgrade.sh` first.)
 
 **Rollback any time:**
 ```bash

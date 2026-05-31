@@ -27,6 +27,8 @@
 #   addons    - (optional) re-install carddav from its LATEST release (bundled
 #               Guzzle 7 = no clash with 1.7). Backs up, enables, health-checks,
 #               and AUTO-REVERTS if webmail shows an error. Usage: addons carddav
+#   all       - run pool->php-swap->upgrade->plugins->routing->harden in order,
+#               stopping at the first failure (each step logs separately)
 #   restore   - roll back files + DB + nginx configs from the latest backups
 #
 # Typical full run:
@@ -452,6 +454,16 @@ addons)
   echo "Settings > Preferences, or set server defaults in plugins/carddav/config.inc.php."; exit 0 ;;
 
 # -----------------------------------------------------------------------------
+all)
+  # Full upgrade, correct order, stop at first failure. Each phase re-invokes this
+  # script so it gets its own cwpsrv -t validation + its own /root/rc-upgrade-*.log.
+  for ph in pool php-swap upgrade plugins routing harden; do
+    echo; echo "##################### ALL -> $ph #####################"
+    "$0" "$ph" || die "phase '$ph' FAILED (see its log). Fix it, then resume from: $0 $ph"
+  done
+  echo; echo "ALL DONE: Roundcube $RC_VER should be live on $PHP_VER. Test /roundcube and mail. webmail."; exit 0 ;;
+
+# -----------------------------------------------------------------------------
 restore)
   FB=$(ls -dt "$BK"/roundcube-files-* 2>/dev/null | head -1)
   SQL=$(ls -t "$BK"/roundcube-db-*.sql 2>/dev/null | head -1)
@@ -472,5 +484,5 @@ restore)
   systemctl restart "$FPM_UNIT" 2>/dev/null; reload_web
   echo "RESTORE done."; exit 0 ;;
 
-*) die "unknown mode '$MODE' (use: detect|pool|php-swap|upgrade|plugins|routing|harden|addons|restore)" ;;
+*) die "unknown mode '$MODE' (use: detect|pool|php-swap|upgrade|plugins|routing|harden|all|addons|restore)" ;;
 esac
