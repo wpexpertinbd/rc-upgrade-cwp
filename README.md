@@ -51,7 +51,7 @@ Prefer to go step-by-step? Run them individually instead of `all`:
 ./rc-upgrade.sh php-swap    # point webmail PHP -> 8.3 (docroot unchanged; checkpoint)
 ./rc-upgrade.sh upgrade     # backup files+DB, download 1.7.x, installto, fix perms
 ./rc-upgrade.sh plugins     # baseline plugin set (drops incompatible 3rd-party plugins)
-./rc-upgrade.sh routing     # docroot -> public_html + static.php handling
+./rc-upgrade.sh routing     # docroot -> public_html + static.php + Apache /webmail symlink
 ./rc-upgrade.sh harden      # real client IP (proxy_whitelist) + login logging + fail2ban jail
 ```
 (Pasted the script from Windows instead of cloning? `sed -i 's/\r$//' rc-upgrade.sh` first.)

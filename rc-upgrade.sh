@@ -336,6 +336,14 @@ routing)
       && echo "rewrote $WEBMAIL_CONF (docroot->public_html, static.php, $RC_SOCK)"
   fi
 
+  # 3) global webmail path: CWP's Apache `Alias /webmail` -> /usr/local/apache/htdocs/roundcube.
+  # Point that at the upgraded public_html so domain.com/webmail works server-wide (all domains),
+  # no per-vhost edits. (Idempotent.) CMS-at-root + forced-www sites are the only exception;
+  # those just use the webmail.<domain> subdomain.
+  if [ -d /usr/local/apache/htdocs ]; then
+    ln -sfn "$RC_DIR/public_html" /usr/local/apache/htdocs/roundcube && echo "linked /usr/local/apache/htdocs/roundcube -> public_html (Apache /webmail path)"
+  fi
+
   chown -R "$RC_OWNER:$RC_GROUP" "$RC_DIR" 2>/dev/null   # normalize (1.7 leaves some files cbpolicyd)
   if ! reload_web; then
     echo "config test failed -> restoring previous configs so cwpsrv stays bootable"
