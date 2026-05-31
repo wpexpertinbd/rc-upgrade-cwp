@@ -24,6 +24,9 @@
 #   harden    - (optional) real client IP into cwpsrv webmail + Roundcube login
 #               logging + a dedicated fail2ban jail. Self-contained; does NOT
 #               touch the main nginx or jail.local that bh-server-ops manages.
+#   addons    - (optional) re-install carddav from its LATEST release (bundled
+#               Guzzle 7 = no clash with 1.7). Backs up, enables, health-checks,
+#               and AUTO-REVERTS if webmail shows an error. Usage: addons carddav
 #   restore   - roll back files + DB + nginx configs from the latest backups
 #
 # Typical full run:
@@ -377,6 +380,54 @@ F2B
   echo -e "\nOK: harden done. Webmail now logs/bans the REAL attacker IP, not 127.0.0.1."; exit 0 ;;
 
 # -----------------------------------------------------------------------------
+addons)
+  # Re-install carddav from its LATEST upstream release. The current RCMCardDAV
+  # targets Guzzle 7 (same major as RC 1.7), so it does NOT hit the old
+  # 'chooseHandler()' fatal. Health-checked + AUTO-REVERTED on any error.
+  ADDON="${2:-carddav}"
+  [ "$ADDON" = carddav ] || die "this phase only supports: carddav"
+  command -v curl >/dev/null || die "curl required"
+  command -v wget >/dev/null || die "wget required"
+  CFG="$RC_DIR/config/config.inc.php"
+  HEALTH_URL="${HEALTH_URL:-https://127.0.0.1:2096/}"   # cwpsrv webmail on loopback
+
+  say "BACKUP config + any existing carddav"
+  cp -a "$CFG" "$BK/config.inc.php.carddav.$(date +%s).bak"
+  [ -d "$RC_DIR/plugins/carddav" ] && cp -a "$RC_DIR/plugins/carddav" "$BK/carddav-old-$(date +%s)"
+
+  say "FETCH latest RCMCardDAV release (bundled deps = Guzzle 7)"
+  URL=$(curl -fsSL https://api.github.com/repos/mstilkerich/rcmcarddav/releases/latest \
+        | grep -oP '"browser_download_url":\s*"\K[^"]*carddav-v[^"]*\.tar\.gz' | head -1)
+  [ -n "$URL" ] || die "could not resolve carddav tarball asset (network/GitHub API?)"
+  echo "URL: $URL"
+  cd "$SRC"; rm -rf carddav-dl; mkdir carddav-dl
+  wget -q "$URL" -O carddav-dl/c.tgz || die "download failed"
+  tar xzf carddav-dl/c.tgz -C carddav-dl
+  PDIR=$(dirname "$(find "$SRC/carddav-dl" -name carddav.php | head -1)")
+  [ -f "$PDIR/carddav.php" ] || die "extracted tarball has no carddav.php"
+  rm -rf "$RC_DIR/plugins/carddav"; cp -a "$PDIR" "$RC_DIR/plugins/carddav"
+  echo "installed plugin from $(basename "$URL")"
+
+  say "ENABLE + restart"
+  grep -q "'carddav'" "$CFG" || sed -i "s/\$config\['plugins'\] = \[/\$config['plugins'] = ['carddav', /" "$CFG"
+  rm -rf "$RC_DIR"/temp/* 2>/dev/null
+  chown -R "$RC_OWNER:$RC_GROUP" "$RC_DIR"
+  systemctl restart "$FPM_UNIT"; reload_web; sleep 1
+
+  say "HEALTH CHECK $HEALTH_URL"
+  body=$(curl -sk "$HEALTH_URL" 2>/dev/null)
+  if echo "$body" | grep -qiE "something went wrong|internal error has occurred"; then
+    echo "FAIL: webmail shows an error -> AUTO-REVERTING carddav"
+    rm -rf "$RC_DIR/plugins/carddav"
+    cp -a "$(ls -t "$BK"/config.inc.php.carddav.*.bak | head -1)" "$CFG"
+    rm -rf "$RC_DIR"/temp/* 2>/dev/null; chown -R "$RC_OWNER:$RC_GROUP" "$RC_DIR"
+    systemctl restart "$FPM_UNIT"; reload_web
+    die "carddav still incompatible -> reverted; webmail restored. Try the composer method, or a specific older carddav release."
+  fi
+  echo -e "\nOK: carddav installed and webmail healthy. Configure it per-user under"
+  echo "Settings > Preferences, or set server defaults in plugins/carddav/config.inc.php."; exit 0 ;;
+
+# -----------------------------------------------------------------------------
 restore)
   FB=$(ls -dt "$BK"/roundcube-files-* 2>/dev/null | head -1)
   SQL=$(ls -t "$BK"/roundcube-db-*.sql 2>/dev/null | head -1)
@@ -397,5 +448,5 @@ restore)
   systemctl restart "$FPM_UNIT" 2>/dev/null; reload_web
   echo "RESTORE done."; exit 0 ;;
 
-*) die "unknown mode '$MODE' (use: detect|pool|php-swap|upgrade|plugins|routing|harden|restore)" ;;
+*) die "unknown mode '$MODE' (use: detect|pool|php-swap|upgrade|plugins|routing|harden|addons|restore)" ;;
 esac

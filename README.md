@@ -197,5 +197,10 @@ if you prefer manual application, then `systemctl restart php-fpm83 && (systemct
 ## Optional extras
 
 - **fail2ban jail + real client IP** — now handled by the `harden` phase (see above).
-- **Re-add** carddav / calendar / tasklist using current (guzzle-7) plugin builds
-  if contacts/calendar sync is needed.
+- **Re-add carddav** with `./rc-upgrade.sh addons carddav` — it installs the
+  *latest* RCMCardDAV release (bundled Guzzle 7, so no `chooseHandler()` clash),
+  enables it, health-checks the webmail, and **auto-reverts** if anything errors.
+  Why the old one broke: CWP shipped a stale carddav that vendored an ancient
+  Guzzle; RC 1.7 ships Guzzle 7, so the old plugin called a removed API.
+- **calendar / tasklist** (Kolab plugins) are heavier and lag Roundcube releases —
+  install a matching current build manually only if in-webmail calendar is needed.
