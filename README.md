@@ -172,6 +172,14 @@ chmod +x /root/rc-upgrade-cwp/rc-upgrade.sh
    which is usually drowned in `[1062] Duplicate entry session` bot-scanner noise).
 8. **CWP updates may revert** `cwp_services.conf` / `webmail.conf`. The pool persists;
    just re-run `php-swap` + `routing` after a panel update. Keep this repo handy.
+9. **alt-php `ProtectSystem=full` makes `/usr` read-only for the pool.** Symptom:
+   `file_put_contents(.../logs/errors.log): Failed to open stream: Read-only file
+   system`. RC can't write logs/temp under the php-fpm pool, which silently breaks
+   logging + fail2ban + attachments (core mail still works because sessions are in
+   the DB). The `pool` phase fixes it with a systemd drop-in:
+   `/etc/systemd/system/<fpm-unit>.service.d/roundcube-rw.conf` adding
+   `ReadWritePaths=<roundcube dir>`. Check with
+   `systemctl show <fpm-unit> -p ProtectSystem -p ReadWritePaths`.
 
 ---
 
@@ -197,10 +205,12 @@ if you prefer manual application, then `systemctl restart php-fpm83 && (systemct
 ## Optional extras
 
 - **fail2ban jail + real client IP** — now handled by the `harden` phase (see above).
-- **Re-add carddav** with `./rc-upgrade.sh addons carddav` — it installs the
-  *latest* RCMCardDAV release (bundled Guzzle 7, so no `chooseHandler()` clash),
-  enables it, health-checks the webmail, and **auto-reverts** if anything errors.
-  Why the old one broke: CWP shipped a stale carddav that vendored an ancient
-  Guzzle; RC 1.7 ships Guzzle 7, so the old plugin called a removed API.
+- **carddav** — ⚠️ **not viable on RC 1.7 via tarball** (incl. latest 5.1.3): the
+  release tarball bundles its own Guzzle which clashes with RC 1.7's Guzzle 7
+  (`GuzzleHttp\choose_handler()` fatal **after login** — the login page looks fine,
+  so it's easy to miss). `addons carddav` now refuses by default and requires
+  `--force`. Only re-enable once RCMCardDAV ships a 1.7-compatible build, ideally
+  installed via **Composer** (single shared Guzzle), and verify by logging in.
+  Revert instantly with `./rc-upgrade.sh plugins`.
 - **calendar / tasklist** (Kolab plugins) are heavier and lag Roundcube releases —
   install a matching current build manually only if in-webmail calendar is needed.

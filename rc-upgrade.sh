@@ -239,6 +239,13 @@ php_admin_value[memory_limit] = 256M
 php_admin_value[date.timezone] = UTC
 EOF
   mkdir -p "$RC_DIR/temp" "$RC_DIR/logs"; chown -R "$RC_OWNER:$RC_GROUP" "$RC_DIR/temp" "$RC_DIR/logs"
+  # alt-php units commonly ship ProtectSystem=full -> /usr (incl. roundcube) is
+  # READ-ONLY for the pool, so RC can't write logs/temp (breaks logging + fail2ban
+  # + attachments). Grant write to ONLY the roundcube dir via a systemd drop-in.
+  DROPIN="/etc/systemd/system/${FPM_UNIT}.service.d"
+  mkdir -p "$DROPIN"
+  printf '[Service]\nReadWritePaths=%s\n' "$RC_DIR" > "$DROPIN/roundcube-rw.conf"
+  systemctl daemon-reload
   systemctl restart "$FPM_UNIT" || die "php-fpm restart failed"
   sleep 1; [ -S "$RC_SOCK" ] || die "socket $RC_SOCK not created - check the pool conf"
   echo "OK: pool live, socket $RC_SOCK present."; exit 0 ;;
@@ -386,6 +393,12 @@ addons)
   # 'chooseHandler()' fatal. Health-checked + AUTO-REVERTED on any error.
   ADDON="${2:-carddav}"
   [ "$ADDON" = carddav ] || die "this phase only supports: carddav"
+  # KNOWN-BROKEN on RC 1.7: carddav release tarballs bundle their own Guzzle, which
+  # clashes with RC 1.7's Guzzle 7 -> GuzzleHttp\choose_handler() fatal AFTER login
+  # (the login-page health check below CANNOT catch it). Confirmed with carddav 5.1.3.
+  echo "WARNING: carddav tarball bundles its own Guzzle and clashes with RC 1.7's"
+  echo "Guzzle 7 (fatal appears only AFTER you log in). Known-broken as of carddav 5.1.3."
+  [ "${3:-}" = "--force" ] || die "refusing by default. With a verified 1.7-compatible build: $0 addons carddav --force  (then LOG IN to verify; revert with: $0 plugins)"
   command -v curl >/dev/null || die "curl required"
   command -v wget >/dev/null || die "wget required"
   CFG="$RC_DIR/config/config.inc.php"
