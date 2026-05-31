@@ -52,8 +52,10 @@ WEBMAIL_CONF="${WEBMAIL_CONF:-/usr/local/cwpsrv/conf.d/webmail.conf}"        # h
 FPM_UNIT="${FPM_UNIT:-php-fpm83}"
 RC_SOCK="${RC_SOCK:-/run/rc-php83.sock}"
 POOL_NAME="roundcube"
-# safe bundled plugins that survive a major upgrade (edit if you need more):
-SAFE_PLUGINS="${SAFE_PLUGINS:-'archive', 'zipdownload', 'managesieve', 'cwpautologon', 'password'}"
+# Good baseline = CWP/core plugins + high-value BUNDLED extras (all ship with 1.7,
+# no external deps, no Guzzle-style clashes). The 'plugins' phase resets to this,
+# so it both removes broken third-party plugins AND keeps these. Edit if needed.
+SAFE_PLUGINS="${SAFE_PLUGINS:-'archive', 'zipdownload', 'managesieve', 'cwpautologon', 'password', 'attachment_reminder', 'newmail_notifier', 'vcard_attachments', 'hide_blockquote', 'markasjunk'}"
 BK="/root/rc-upgrade-backups"
 SRC="/usr/local/src"
 MODE="${1:-detect}"
