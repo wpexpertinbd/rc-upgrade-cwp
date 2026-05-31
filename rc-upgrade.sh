@@ -311,6 +311,7 @@ routing)
       && echo "rewrote $WEBMAIL_CONF (docroot->public_html, static.php, $RC_SOCK)"
   fi
 
+  chown -R "$RC_OWNER:$RC_GROUP" "$RC_DIR" 2>/dev/null   # normalize (1.7 leaves some files cbpolicyd)
   reload_web || die "cwpsrv reload failed - check configs / restore"
   echo "OK: routing fixed. Load /roundcube and mail. webmail - both should be styled 1.7.x on $PHP_VER."; exit 0 ;;
 
@@ -372,6 +373,7 @@ F2B
   else
     echo "NOTE: fail2ban not installed - skipped. (bh-server-ops installs it; re-run harden after.)"
   fi
+  chown -R "$RC_OWNER:$RC_GROUP" "$RC_DIR" 2>/dev/null   # normalize ownership (config.inc.php was edited as root)
   echo -e "\nOK: harden done. Webmail now logs/bans the REAL attacker IP, not 127.0.0.1."; exit 0 ;;
 
 # -----------------------------------------------------------------------------
