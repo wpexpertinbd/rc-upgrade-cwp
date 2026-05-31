@@ -71,6 +71,40 @@ SAFE_PLUGINS="'archive','zipdownload','managesieve','password'" ./rc-upgrade.sh 
 
 ---
 
+## Repair after a CWP update
+
+A CWP panel update can silently regenerate `cwp_services.conf` and `webmail.conf`,
+reverting them to php71 + the old docroot (webmail breaks again). The fix is just
+re-running the idempotent phases — no re-upgrade needed. Each phase backs up before
+changing anything.
+
+**Health check — see what broke (10s):**
+```bash
+echo -n "RC version : "; grep -oP "RCMAIL_VERSION'\s*,\s*'\K[^']+" /usr/local/cwpsrv/var/services/roundcube/program/include/iniset.php
+echo -n "socket     : "; (ls /run/rc-php83.sock >/dev/null 2>&1 && echo present) || echo MISSING
+echo "php targets:"; grep -h fastcgi_pass /usr/local/cwpsrv/conf.d/webmail.conf /usr/local/cwpsrv/conf/cwp_services.conf | sort -u
+```
+
+**Match the repair:**
+
+| Symptom (from health check) | Command |
+|---|---|
+| Webmail stub/unstyled/php71, but RC=1.7.x and socket present (most common) | `./rc-upgrade.sh routing` |
+| `socket: MISSING` (alt-php / php-fpm83 update wiped the pool) | `./rc-upgrade.sh pool` then `./rc-upgrade.sh routing` |
+| `RC version` is NOT 1.7.x (CWP restored its bundled old Roundcube — rare) | `./rc-upgrade.sh upgrade` then `plugins` then `routing` |
+
+**Rule of thumb:** after any CWP update, if webmail looks wrong → run
+**`./rc-upgrade.sh routing`** first; if the socket is gone, run **`pool`** before it.
+
+Keep this repo cloned at `/root/rc-upgrade-cwp` on each server so the repair is
+always one command away:
+```bash
+git clone https://github.com/wpexpertinbd/rc-upgrade-cwp /root/rc-upgrade-cwp
+chmod +x /root/rc-upgrade-cwp/rc-upgrade.sh
+```
+
+---
+
 ## Gotchas we hit (so you don't, on the next server)
 
 1. **CRLF** — script pasted from Windows fails with `bad interpreter: /bin/bash^M`.
