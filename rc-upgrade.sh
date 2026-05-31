@@ -21,6 +21,9 @@
 #               incompatible carddav/calendar/tasklist that bundle old Guzzle)
 #   routing   - point docroot -> public_html + add static.php PATH_INFO handling
 #               (ONLY valid AFTER upgrade: 1.5.x has no public_html/)
+#   harden    - (optional) real client IP into cwpsrv webmail + Roundcube login
+#               logging + a dedicated fail2ban jail. Self-contained; does NOT
+#               touch the main nginx or jail.local that bh-server-ops manages.
 #   restore   - roll back files + DB + nginx configs from the latest backups
 #
 # Typical full run:
@@ -30,6 +33,7 @@
 #   ./rc-upgrade.sh upgrade
 #   ./rc-upgrade.sh plugins
 #   ./rc-upgrade.sh routing      # then load webmail -> styled 1.7.x login
+#   ./rc-upgrade.sh harden       # (optional) real-IP logging + fail2ban jail
 #
 # Rollback any time:  ./rc-upgrade.sh restore
 #
@@ -122,6 +126,11 @@ server {
     listen       2095;
     server_name  localhost;
 
+    # trust the main-nginx reverse proxy on loopback so logs/bans see the real client IP
+    set_real_ip_from 127.0.0.1;
+    real_ip_header X-Forwarded-For;
+    real_ip_recursive on;
+
     location / {
         root   $RC_DIR/public_html;
         index  index.php;
@@ -150,6 +159,11 @@ server {
     ssl_protocols       TLSv1 TLSv1.1 TLSv1.2;
     ssl_ciphers         HIGH:!aNULL:!MD5;
     ssl_prefer_server_ciphers   on;
+
+    # trust the main-nginx reverse proxy on loopback so logs/bans see the real client IP
+    set_real_ip_from 127.0.0.1;
+    real_ip_header X-Forwarded-For;
+    real_ip_recursive on;
 
     location / {
         root   $RC_DIR/public_html;
@@ -297,6 +311,66 @@ routing)
   echo "OK: routing fixed. Load /roundcube and mail. webmail - both should be styled 1.7.x on $PHP_VER."; exit 0 ;;
 
 # -----------------------------------------------------------------------------
+harden)
+  # Optional: make webmail see the REAL client IP, log failed logins, and jail
+  # the scanners. Self-contained - does NOT touch the main nginx or jail.local
+  # that bh-server-ops owns. Run AFTER routing.
+  say "1) real client IP in webmail.conf"
+  if [ -f "$WEBMAIL_CONF" ]; then
+    if grep -q 'set_real_ip_from' "$WEBMAIL_CONF"; then
+      echo "real_ip already present"
+    else
+      cp -a "$WEBMAIL_CONF" "$BK/webmail.conf.harden.$(date +%s).bak"
+      sed -i '/^[[:space:]]*server_name[[:space:]]\+localhost;/a\    set_real_ip_from 127.0.0.1;\n    real_ip_header X-Forwarded-For;\n    real_ip_recursive on;' "$WEBMAIL_CONF"
+      echo "added real_ip to both server blocks"
+    fi
+    if ! reload_web; then
+      echo "cwpsrv reload FAILED (realip module missing?) - reverting"
+      b=$(ls -t "$BK"/webmail.conf.harden.*.bak 2>/dev/null | head -1)
+      [ -n "$b" ] && cp -a "$b" "$WEBMAIL_CONF" && reload_web
+      die "reverted webmail.conf - harden aborted"
+    fi
+  else
+    echo "skip: $WEBMAIL_CONF not found"
+  fi
+
+  say "2) Roundcube: log failed logins with IP"
+  CFG="$RC_DIR/config/config.inc.php"
+  grep -qF "\$config['log_logins'] = true;" "$CFG" || printf "\n\$config['log_logins'] = true;\n" >> "$CFG"
+  echo "log_logins enabled"
+
+  say "3) fail2ban jail (separate files; jail name bh-roundcube)"
+  if command -v fail2ban-client >/dev/null 2>&1; then
+    cat > /etc/fail2ban/filter.d/bh-roundcube.conf <<'F2B'
+[Definition]
+failregex = (?:Failed login for|IMAP Error: Login failed for) .*? from <HOST>
+ignoreregex =
+F2B
+    cat > /etc/fail2ban/jail.d/bh-roundcube.local <<F2B
+# Roundcube webmail brute-force jail. Inherits [DEFAULT] (bantime/ignoreip/
+# banaction) from your existing fail2ban config - no jail.local overwrite.
+[bh-roundcube]
+enabled  = true
+filter   = bh-roundcube
+logpath  = $RC_DIR/logs/errors.log
+           $RC_DIR/logs/userlogins
+port     = http,https,2095,2096
+maxretry = 5
+findtime = 600
+bantime  = 3600
+backend  = auto
+F2B
+    systemctl restart fail2ban 2>/dev/null || service fail2ban restart 2>/dev/null
+    sleep 1
+    fail2ban-client status bh-roundcube >/dev/null 2>&1 \
+      && echo "jail bh-roundcube ACTIVE" \
+      || echo "WARN: jail not active yet - check: journalctl -u fail2ban | tail"
+  else
+    echo "NOTE: fail2ban not installed - skipped. (bh-server-ops installs it; re-run harden after.)"
+  fi
+  echo -e "\nOK: harden done. Webmail now logs/bans the REAL attacker IP, not 127.0.0.1."; exit 0 ;;
+
+# -----------------------------------------------------------------------------
 restore)
   FB=$(ls -dt "$BK"/roundcube-files-* 2>/dev/null | head -1)
   SQL=$(ls -t "$BK"/roundcube-db-*.sql 2>/dev/null | head -1)
@@ -317,5 +391,5 @@ restore)
   systemctl restart "$FPM_UNIT" 2>/dev/null; reload_web
   echo "RESTORE done."; exit 0 ;;
 
-*) die "unknown mode '$MODE' (use: detect|pool|php-swap|upgrade|plugins|routing|restore)" ;;
+*) die "unknown mode '$MODE' (use: detect|pool|php-swap|upgrade|plugins|routing|harden|restore)" ;;
 esac

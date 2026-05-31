@@ -47,6 +47,7 @@ sed -i 's/\r$//' rc-upgrade.sh && chmod +x rc-upgrade.sh
 ./rc-upgrade.sh plugins     # trim incompatible plugins (carddav/calendar/tasklist)
 ./rc-upgrade.sh routing     # docroot -> public_html + static.php handling
 #   -> load /roundcube AND mail. webmail: styled 1.7.x login on PHP 8.3
+./rc-upgrade.sh harden      # OPTIONAL: real client IP + login logging + fail2ban jail
 ```
 
 **Rollback any time:**
@@ -68,6 +69,43 @@ RC_VER=1.6.16 ./rc-upgrade.sh upgrade     # target a different release
 RC_SOCK=/run/rc-php83.sock FPM_UNIT=php-fpm83 ./rc-upgrade.sh detect
 SAFE_PLUGINS="'archive','zipdownload','managesieve','password'" ./rc-upgrade.sh plugins
 ```
+
+---
+
+## Optional: `harden` (real client IP + fail2ban) — and how it stays clear of bh-server-ops
+
+By default the webmail scanners (SQLi/XXE login probes) all log as `127.0.0.1`,
+because they arrive via the cwpsrv proxy on loopback. The `harden` phase fixes that:
+
+1. **Real client IP** — adds `set_real_ip_from 127.0.0.1; real_ip_header X-Forwarded-For;`
+   to cwpsrv's `webmail.conf` (also baked into `routing` now), so `$remote_addr` /
+   `REMOTE_ADDR` become the actual visitor IP.
+2. **Login logging** — sets `$config['log_logins'] = true;` so failed logins are
+   recorded with the IP.
+3. **fail2ban jail** — writes `filter.d/bh-roundcube.conf` + `jail.d/bh-roundcube.local`
+   (jail name `[bh-roundcube]`) watching `roundcube/logs/errors.log` + `userlogins`.
+
+```bash
+./rc-upgrade.sh harden
+```
+
+### Why it does NOT conflict with [bh-server-ops](https://github.com/wpexpertinbd/bh-server-ops)
+
+`bh-server-ops` hardens the **main** nginx (ports 80/443 customer sites): jails
+`nginx-badbot` / `wp-login`, anti-bot maps in `/etc/nginx/bh.d/`. The webmail
+attack surface is a different server (cwpsrv :2095/:2096/:2031) it never touches.
+`harden` is deliberately isolated:
+
+- only edits **cwpsrv's `webmail.conf`** — never `/etc/nginx/*` or the vhost `.stpl`
+  templates that bh-server-ops manages;
+- uses a **unique jail name** (`bh-roundcube`) and **separate files** under
+  `filter.d/` + `jail.d/` — never creates/overwrites `jail.local`, so it **inherits**
+  your existing `[DEFAULT]` (`bantime`, `ignoreip`, `banaction`);
+- **does not install** fail2ban — if it's absent (i.e. you haven't run bh-server-ops
+  yet) it skips the jail with a note; run `harden` again afterwards.
+
+Run order: `harden` goes **after** `routing`. Safe to run on a box that already has
+bh-server-ops applied.
 
 ---
 
@@ -144,7 +182,10 @@ rc-upgrade.sh                              # the tool (detect|pool|php-swap|upgr
 templates/
   roundcube-php83-pool.conf                # dedicated php-fpm 8.3 pool
   cwp_services-roundcube.block.conf         # corrected /roundcube subpath block (port 2031)
-  webmail.conf                             # corrected :2095/:2096 webmail vhost
+  webmail.conf                             # corrected :2095/:2096 webmail vhost (+ real_ip)
+  fail2ban/
+    bh-roundcube.conf                      # filter.d/  - failed-login regex
+    bh-roundcube.local                     # jail.d/    - isolated jail (harden phase)
 README.md
 ```
 
@@ -153,12 +194,8 @@ if you prefer manual application, then `systemctl restart php-fpm83 && (systemct
 
 ---
 
-## Still TODO on the reference box (optional hardening)
+## Optional extras
 
-- **fail2ban jail** on Roundcube auth + block the SQLi/XXE login scanners.
-- **Pass the real client IP** to webmail — currently all hits log as `127.0.0.1`
-  because cwpsrv proxies without forwarding the client IP, blinding brute-force
-  protection. (Set `fastcgi_param REMOTE_ADDR` / trust `X-Forwarded-For` + RC
-  `proxy_whitelist`.)
+- **fail2ban jail + real client IP** — now handled by the `harden` phase (see above).
 - **Re-add** carddav / calendar / tasklist using current (guzzle-7) plugin builds
   if contacts/calendar sync is needed.

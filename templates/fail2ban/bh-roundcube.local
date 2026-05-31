@@ -1,0 +1,14 @@
+# /etc/fail2ban/jail.d/bh-roundcube.local
+# Roundcube webmail brute-force jail. Separate file + unique jail name so it does
+# NOT clash with bh-server-ops jails (nginx-badbot, wp-login). It intentionally
+# omits [DEFAULT] so it inherits your existing bantime/ignoreip/banaction.
+[bh-roundcube]
+enabled  = true
+filter   = bh-roundcube
+logpath  = /usr/local/cwpsrv/var/services/roundcube/logs/errors.log
+           /usr/local/cwpsrv/var/services/roundcube/logs/userlogins
+port     = http,https,2095,2096
+maxretry = 5
+findtime = 600
+bantime  = 3600
+backend  = auto
