@@ -64,6 +64,11 @@ die(){ echo "ERROR: $*" >&2; exit 1; }
 say(){ echo -e "\n=== $* ==="; }
 [ "$(id -u)" = 0 ] || die "run as root"
 
+# Log everything to a per-phase file (SSH output gets huge; share the file instead).
+LOG="/root/rc-upgrade-${MODE}-$(date +%Y%m%d-%H%M%S).log"
+exec > >(tee -a "$LOG") 2>&1
+echo "rc-upgrade.sh  phase=$MODE  log=$LOG"
+
 # ---- auto-detect php 8.3 (CWP alt-php layout) -------------------------------
 EXEC=$(systemctl show -p ExecStart --value "${FPM_UNIT}.service" 2>/dev/null)
 FPM_BIN=$(echo "$EXEC" | grep -oP 'path=\K[^ ;]+' | head -1)
@@ -100,7 +105,16 @@ mk_defaults(){ # $1 = output cnf path; echoes db name
   ' "$RC_DIR/config/config.inc.php" "$1"
 }
 
-reload_web(){ systemctl reload cwpsrv 2>/dev/null || systemctl restart cwpsrv; }
+# cwpsrv (CWP's nginx) config validation. `systemctl reload` sends SIGHUP and
+# returns 0 even when nginx REJECTS the new config (keeps old) - which then bricks
+# the next restart. So test with the binary's -t first.
+CWPSRV_BIN=$(systemctl show cwpsrv.service -p ExecStart --value 2>/dev/null | grep -oP 'path=\K[^ ;]+' | head -1)
+cwpsrv_testable(){ [ -n "$CWPSRV_BIN" ] && [ -x "$CWPSRV_BIN" ]; }
+cwpsrv_ok(){ "$CWPSRV_BIN" -t >/dev/null 2>&1; }
+reload_web(){
+  if cwpsrv_testable && ! cwpsrv_ok; then echo "ERROR: cwpsrv config test FAILED ($CWPSRV_BIN -t):"; "$CWPSRV_BIN" -t 2>&1 | tail -3; return 1; fi
+  systemctl reload cwpsrv 2>/dev/null || systemctl restart cwpsrv
+}
 
 # ---- generate the corrected /roundcube block (subpath, port 2031) -----------
 roundcube_block(){
@@ -135,11 +149,6 @@ server {
     listen       2095;
     server_name  localhost;
 
-    # trust the main-nginx reverse proxy on loopback so logs/bans see the real client IP
-    set_real_ip_from 127.0.0.1;
-    real_ip_header X-Forwarded-For;
-    real_ip_recursive on;
-
     location / {
         root   $RC_DIR/public_html;
         index  index.php;
@@ -168,11 +177,6 @@ server {
     ssl_protocols       TLSv1 TLSv1.1 TLSv1.2;
     ssl_ciphers         HIGH:!aNULL:!MD5;
     ssl_prefer_server_ciphers   on;
-
-    # trust the main-nginx reverse proxy on loopback so logs/bans see the real client IP
-    set_real_ip_from 127.0.0.1;
-    real_ip_header X-Forwarded-For;
-    real_ip_recursive on;
 
     location / {
         root   $RC_DIR/public_html;
@@ -324,7 +328,12 @@ routing)
   fi
 
   chown -R "$RC_OWNER:$RC_GROUP" "$RC_DIR" 2>/dev/null   # normalize (1.7 leaves some files cbpolicyd)
-  reload_web || die "cwpsrv reload failed - check configs / restore"
+  if ! reload_web; then
+    echo "config test failed -> restoring previous configs so cwpsrv stays bootable"
+    b1=$(ls -t "$BK/$(basename "$SERVICES_CONF")".*.bak 2>/dev/null | head -1); [ -n "$b1" ] && cp -a "$b1" "$SERVICES_CONF"
+    b2=$(ls -t "$BK/$(basename "$WEBMAIL_CONF")".*.bak 2>/dev/null | head -1); [ -n "$b2" ] && cp -a "$b2" "$WEBMAIL_CONF"
+    reload_web; die "routing reverted - check the configs (see $LOG)"
+  fi
   echo "OK: routing fixed. Load /roundcube and mail. webmail - both should be styled 1.7.x on $PHP_VER."; exit 0 ;;
 
 # -----------------------------------------------------------------------------
@@ -332,27 +341,27 @@ harden)
   # Optional: make webmail see the REAL client IP, log failed logins, and jail
   # the scanners. Self-contained - does NOT touch the main nginx or jail.local
   # that bh-server-ops owns. Run AFTER routing.
-  say "1) real client IP in webmail.conf"
-  if [ -f "$WEBMAIL_CONF" ]; then
-    if grep -q 'set_real_ip_from' "$WEBMAIL_CONF"; then
-      echo "real_ip already present"
+  say "1) real client IP for Roundcube logging"
+  CFG="$RC_DIR/config/config.inc.php"
+  # PORTABLE: have Roundcube itself trust the loopback proxy's X-Forwarded-For.
+  # Works on ANY cwpsrv build (no realip module needed) -> logs/jail see the real IP.
+  grep -q "proxy_whitelist" "$CFG" || printf "\n\$config['proxy_whitelist'] = ['127.0.0.1'];\n" >> "$CFG"
+  echo "Roundcube proxy_whitelist set (real IP via X-Forwarded-For)"
+  # BONUS: also set nginx realip, but ONLY if this cwpsrv build supports it.
+  if [ -f "$WEBMAIL_CONF" ] && ! grep -q 'set_real_ip_from' "$WEBMAIL_CONF"; then
+    cp -a "$WEBMAIL_CONF" "$BK/webmail.conf.harden.$(date +%s).bak"
+    sed -i '/^[[:space:]]*server_name[[:space:]]\+localhost;/a\    set_real_ip_from 127.0.0.1;\n    real_ip_header X-Forwarded-For;\n    real_ip_recursive on;' "$WEBMAIL_CONF"
+    if cwpsrv_testable && ! cwpsrv_ok; then
+      echo "note: this cwpsrv build has no realip module -> reverting nginx real_ip"
+      echo "      (proxy_whitelist above already covers real-IP logging, so this is fine)"
+      cp -a "$(ls -t "$BK"/webmail.conf.harden.*.bak | head -1)" "$WEBMAIL_CONF"
     else
-      cp -a "$WEBMAIL_CONF" "$BK/webmail.conf.harden.$(date +%s).bak"
-      sed -i '/^[[:space:]]*server_name[[:space:]]\+localhost;/a\    set_real_ip_from 127.0.0.1;\n    real_ip_header X-Forwarded-For;\n    real_ip_recursive on;' "$WEBMAIL_CONF"
-      echo "added real_ip to both server blocks"
+      echo "added nginx real_ip too (build supports realip)"
     fi
-    if ! reload_web; then
-      echo "cwpsrv reload FAILED (realip module missing?) - reverting"
-      b=$(ls -t "$BK"/webmail.conf.harden.*.bak 2>/dev/null | head -1)
-      [ -n "$b" ] && cp -a "$b" "$WEBMAIL_CONF" && reload_web
-      die "reverted webmail.conf - harden aborted"
-    fi
-  else
-    echo "skip: $WEBMAIL_CONF not found"
   fi
+  reload_web || die "cwpsrv config test/reload failed - check $WEBMAIL_CONF"
 
   say "2) Roundcube: log failed logins with IP"
-  CFG="$RC_DIR/config/config.inc.php"
   grep -qF "\$config['log_logins'] = true;" "$CFG" || printf "\n\$config['log_logins'] = true;\n" >> "$CFG"
   echo "log_logins enabled"
 

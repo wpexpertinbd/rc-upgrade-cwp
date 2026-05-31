@@ -77,9 +77,13 @@ SAFE_PLUGINS="'archive','zipdownload','managesieve','password'" ./rc-upgrade.sh 
 By default the webmail scanners (SQLi/XXE login probes) all log as `127.0.0.1`,
 because they arrive via the cwpsrv proxy on loopback. The `harden` phase fixes that:
 
-1. **Real client IP** — adds `set_real_ip_from 127.0.0.1; real_ip_header X-Forwarded-For;`
-   to cwpsrv's `webmail.conf` (also baked into `routing` now), so `$remote_addr` /
-   `REMOTE_ADDR` become the actual visitor IP.
+1. **Real client IP (portable)** — sets Roundcube `$config['proxy_whitelist'] = ['127.0.0.1']`
+   so RC trusts the loopback proxy's `X-Forwarded-For` and logs the real visitor IP.
+   This works on **any** cwpsrv build. It *also* tries nginx `set_real_ip_from` as a
+   bonus, but **only if `cwpsrv -t` passes** — some CWP cwpsrv builds lack the
+   `realip` module (`unknown directive "set_real_ip_from"` → cwpsrv won't start), so
+   if it's unsupported the script reverts that line automatically and relies on
+   `proxy_whitelist`. (Real-IP logging still works either way.)
 2. **Login logging** — sets `$config['log_logins'] = true;` so failed logins are
    recorded with the IP.
 3. **fail2ban jail** — writes `filter.d/bh-roundcube.conf` + `jail.d/bh-roundcube.local`
@@ -172,7 +176,14 @@ chmod +x /root/rc-upgrade-cwp/rc-upgrade.sh
    which is usually drowned in `[1062] Duplicate entry session` bot-scanner noise).
 8. **CWP updates may revert** `cwp_services.conf` / `webmail.conf`. The pool persists;
    just re-run `php-swap` + `routing` after a panel update. Keep this repo handy.
-9. **alt-php `ProtectSystem=full` makes `/usr` read-only for the pool.** Symptom:
+9. **Not every cwpsrv build has the `realip` module.** `set_real_ip_from` →
+   `[emerg] unknown directive` → cwpsrv refuses to start. Worse, `systemctl reload`
+   sends SIGHUP and returns `0` even when nginx **rejects** the config (it keeps the
+   old one) — so the breakage stays hidden until the next *restart* bricks it. The
+   script now validates with the cwpsrv binary's `-t` before reloading, and `harden`
+   gets real-IP via Roundcube `proxy_whitelist` (portable) instead of depending on
+   the nginx module.
+10. **alt-php `ProtectSystem=full` makes `/usr` read-only for the pool.** Symptom:
    `file_put_contents(.../logs/errors.log): Failed to open stream: Read-only file
    system`. RC can't write logs/temp under the php-fpm pool, which silently breaks
    logging + fail2ban + attachments (core mail still works because sessions are in
