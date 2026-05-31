@@ -56,6 +56,19 @@ Prefer to go step-by-step? Run them individually instead of `all`:
 ```
 (Pasted the script from Windows instead of cloning? `sed -i 's/\r$//' rc-upgrade.sh` first.)
 
+### Future updates (new Roundcube release)
+
+On a box that's already set up, a new release is a one-liner — pool/routing/harden
+stay in place; only the files+DB get bumped:
+
+```bash
+cd /root/rc-upgrade-cwp && git pull   # get any script fixes
+./rc-upgrade.sh update                # auto-detects newest stable, upgrades only if behind
+```
+
+`update` backs up files+DB first and skips if you're already current. To pin a
+specific version instead: `RC_VER=1.7.2 ./rc-upgrade.sh upgrade`.
+
 **Rollback any time:**
 ```bash
 ./rc-upgrade.sh restore        # dry-run: shows what it would restore

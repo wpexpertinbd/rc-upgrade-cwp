@@ -29,6 +29,8 @@
 #               and AUTO-REVERTS if webmail shows an error. Usage: addons carddav
 #   all       - run pool->php-swap->upgrade->plugins->routing->harden in order,
 #               stopping at the first failure (each step logs separately)
+#   update    - routine bump: detect newest stable release, upgrade ONLY if behind
+#               (use on an already-set-up box; just 'upgrade', nothing else needed)
 #   restore   - roll back files + DB + nginx configs from the latest backups
 #
 # Typical full run:
@@ -117,6 +119,10 @@ reload_web(){
   if cwpsrv_testable && ! cwpsrv_ok; then echo "ERROR: cwpsrv config test FAILED ($CWPSRV_BIN -t):"; "$CWPSRV_BIN" -t 2>&1 | tail -3; return 1; fi
   systemctl reload cwpsrv 2>/dev/null || systemctl restart cwpsrv
 }
+
+# newest stable Roundcube version tag from GitHub (e.g. 1.7.2)
+latest_rc_ver(){ curl -fsSL https://api.github.com/repos/roundcube/roundcubemail/releases/latest 2>/dev/null | grep -oP '"tag_name":\s*"\K[^"]+'; }
+rc_installed_ver(){ grep -oP "RCMAIL_VERSION'\s*,\s*'\K[^']+" "$RC_DIR/program/include/iniset.php" 2>/dev/null; }
 
 # ---- generate the corrected /roundcube block (subpath, port 2031) -----------
 roundcube_block(){
@@ -274,6 +280,7 @@ php-swap)
 # -----------------------------------------------------------------------------
 upgrade)
   command -v wget >/dev/null || die "wget required"
+  if [ "$RC_VER" = latest ]; then RC_VER=$(latest_rc_ver); [ -n "$RC_VER" ] || die "could not resolve latest Roundcube version"; echo "latest stable Roundcube = $RC_VER"; fi
   say "BACKUP files"; cp -a "$RC_DIR" "$BK/roundcube-files-$(date +%s)"
   say "BACKUP database"
   DEF="$BK/.rcmy.cnf"; trap 'rm -f "$DEF"' EXIT
@@ -464,6 +471,18 @@ all)
   echo; echo "ALL DONE: Roundcube $RC_VER should be live on $PHP_VER. Test /roundcube and mail. webmail."; exit 0 ;;
 
 # -----------------------------------------------------------------------------
+update)
+  # Routine version bump on an already-set-up box: detect newest stable release and
+  # upgrade ONLY if behind. Pool/routing/harden already in place, so just 'upgrade'.
+  command -v curl >/dev/null || die "curl required"
+  LATEST=$(latest_rc_ver); [ -n "$LATEST" ] || die "could not resolve latest version from GitHub"
+  CUR=$(rc_installed_ver)
+  echo "installed: ${CUR:-?}   latest stable: $LATEST"
+  [ "$CUR" = "$LATEST" ] && { echo "Already on the latest ($CUR). Nothing to do."; exit 0; }
+  echo "Upgrading $CUR -> $LATEST ..."
+  RC_VER="$LATEST" "$0" upgrade; exit $? ;;
+
+# -----------------------------------------------------------------------------
 restore)
   FB=$(ls -dt "$BK"/roundcube-files-* 2>/dev/null | head -1)
   SQL=$(ls -t "$BK"/roundcube-db-*.sql 2>/dev/null | head -1)
@@ -484,5 +503,5 @@ restore)
   systemctl restart "$FPM_UNIT" 2>/dev/null; reload_web
   echo "RESTORE done."; exit 0 ;;
 
-*) die "unknown mode '$MODE' (use: detect|pool|php-swap|upgrade|plugins|routing|harden|all|addons|restore)" ;;
+*) die "unknown mode '$MODE' (use: detect|pool|php-swap|upgrade|plugins|routing|harden|all|update|addons|restore)" ;;
 esac
