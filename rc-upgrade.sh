@@ -364,6 +364,13 @@ harden)
   # Works on ANY cwpsrv build (no realip module needed) -> logs/jail see the real IP.
   grep -q "proxy_whitelist" "$CFG" || printf "\n\$config['proxy_whitelist'] = ['127.0.0.1'];\n" >> "$CFG"
   echo "Roundcube proxy_whitelist set (real IP via X-Forwarded-For)"
+  # SELF-HEAL: if a prior run left realip lines but THIS cwpsrv build rejects them
+  # (no realip module), strip them now — otherwise the next cwpsrv restart crashes.
+  if [ -f "$WEBMAIL_CONF" ] && grep -q 'set_real_ip_from' "$WEBMAIL_CONF" && cwpsrv_testable && ! cwpsrv_ok; then
+    cp -a "$WEBMAIL_CONF" "$BK/webmail.conf.harden.$(date +%s).bak"
+    sed -i '/set_real_ip_from\|real_ip_header\|real_ip_recursive/d' "$WEBMAIL_CONF"
+    echo "removed unsupported nginx real_ip lines (this cwpsrv build has no realip module)"
+  fi
   # BONUS: also set nginx realip, but ONLY if this cwpsrv build supports it.
   if [ -f "$WEBMAIL_CONF" ] && ! grep -q 'set_real_ip_from' "$WEBMAIL_CONF"; then
     cp -a "$WEBMAIL_CONF" "$BK/webmail.conf.harden.$(date +%s).bak"
