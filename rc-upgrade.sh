@@ -266,16 +266,44 @@ EOF
 
 # -----------------------------------------------------------------------------
 php-swap)
-  # repoint ONLY the PHP handler to the 8.3 socket in BOTH webmail routes,
-  # WITHOUT changing docroot. Your current Roundcube now runs on 8.3.
-  for f in "$SERVICES_CONF" "$WEBMAIL_CONF"; do
-    [ -f "$f" ] || { echo "skip (missing): $f"; continue; }
-    cp -a "$f" "$BK/$(basename "$f").$(date +%s).bak"
-    sed -i "s#unix:/usr/local/cwp/php[0-9]*/var/sockets/cwpsvc.sock;#unix:$RC_SOCK;#g" "$f" \
-      && echo "patched socket in $f"
-  done
+  # Repoint ONLY the PHP handler to the 8.3 socket for the webmail/roundcube
+  # routes, WITHOUT changing docroot. Your current Roundcube now runs on 8.3.
+  #
+  # ⚠ CRITICAL: $SERVICES_CONF (cwp_services.conf) is SHARED — it also holds the
+  # sibling /pma and /phpPgAdmin location blocks, which originally use the SAME
+  # php71 cwpsvc.sock. A naive GLOBAL sed (the old behaviour) dragged THOSE onto
+  # the roundcube pool too, where they inherited its locked
+  # `php_admin_value[upload_max_filesize] = 64M` — silently capping phpMyAdmin
+  # DB imports at 64M no matter what php.ini said. (Bug found on the fleet
+  # 2026-06-08.) So in $SERVICES_CONF we flip the socket ONLY inside the
+  # /roundcube location block; /pma and /phpPgAdmin are left on cwpsvc untouched.
+  # $WEBMAIL_CONF (:2095/:2096) is all-roundcube, so a global swap is safe there.
+  OLD_SOCK_RE='unix:/usr/local/cwp/php[0-9]*/var/sockets/cwpsvc.sock;'
+
+  # webmail.conf — every server block is roundcube; global swap is correct.
+  if [ -f "$WEBMAIL_CONF" ]; then
+    cp -a "$WEBMAIL_CONF" "$BK/$(basename "$WEBMAIL_CONF").$(date +%s).bak"
+    sed -i "s#${OLD_SOCK_RE}#unix:$RC_SOCK;#g" "$WEBMAIL_CONF" && echo "patched socket in $WEBMAIL_CONF"
+  fi
+
+  # cwp_services.conf — flip ONLY the fastcgi_pass inside the /roundcube block.
+  if [ -f "$SERVICES_CONF" ]; then
+    cp -a "$SERVICES_CONF" "$BK/$(basename "$SERVICES_CONF").$(date +%s).bak"
+    awk -v sock="unix:$RC_SOCK;" '
+      /^[[:space:]]*location[^{]*\/roundcube/                 { inrc=1 }
+      inrc && /^[[:space:]]*location[^{]*\/(pma|phpPgAdmin)/  { inrc=0 }
+      inrc && /fastcgi_pass[[:space:]]+unix:\/usr\/local\/cwp\/php[0-9]*\/var\/sockets\/cwpsvc\.sock;/ {
+        sub(/unix:\/usr\/local\/cwp\/php[0-9]*\/var\/sockets\/cwpsvc\.sock;/, sock)
+      }
+      { print }
+    ' "$SERVICES_CONF" > "$SERVICES_CONF.rcnew" \
+      && cat "$SERVICES_CONF.rcnew" > "$SERVICES_CONF" \
+      && rm -f "$SERVICES_CONF.rcnew" \
+      && echo "patched /roundcube socket only in $SERVICES_CONF (pma/phpPgAdmin left on cwpsvc)"
+  fi
+
   reload_web || die "cwpsrv reload failed"
-  echo "OK: webmail PHP handler -> $RC_SOCK (php $PHP_VER). Load webmail; it should still work."; exit 0 ;;
+  echo "OK: webmail PHP handler -> $RC_SOCK (php $PHP_VER); pma/phpPgAdmin untouched. Load webmail; it should still work."; exit 0 ;;
 
 # -----------------------------------------------------------------------------
 upgrade)
